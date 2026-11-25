@@ -165,7 +165,7 @@ def observe_gateway(conn, route, *, home, force=False, now=None, pid_alive=None,
     fired = False
     if prev == "yes" and up == "no":
         route("service_down", {
-            "summary": "Hermes gateway is down",
+            "summary": "The assistant gateway is down",
             "context": "base",
             "detail": state.get("detail") or "gateway down",
         })

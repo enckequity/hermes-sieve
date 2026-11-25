@@ -14,7 +14,7 @@ QUESTIONS = {
     "always": (
         "Which alerts should reach you no matter the hour? "
         "These become T5, so a quiet window cannot hold them unless its floor is none. "
-        "A ring through Silent only happens when the Hermes iOS app is open and synced to this profile. "
+        "A ring through Silent only happens when the TeamShift app is open and synced to this profile. "
         "No phone, or the app closed: T5 stays on an in-app desktop toast plus the chat chain, and it does not ring. "
         "A closed app cannot do that. "
         f"Classes: {', '.join(CLASSES)}. "
@@ -32,10 +32,10 @@ QUESTIONS = {
     ),
     "arm": (
         "Should T4 and T5 try the phone on this machine? "
-        "A ring only lands if the Hermes iOS app is open and synced, and a phone is registered. "
+        "A ring only lands if the TeamShift app is open and synced, and a phone is registered. "
         "Reply yes or no. Example: no. "
         "no keeps them on an in-app desktop toast plus the chat chain. "
-        "Run /sieve doctor to see whether hermes send and a synced phone are actually here."
+        "Run /sieve doctor to see whether message delivery and a synced phone are actually here."
     ),
     "digest": (
         "Where should held digests be delivered? "
@@ -46,7 +46,7 @@ QUESTIONS = {
         "Where should T4/T5 interrupts be delivered? "
         "This chain is the messaging push that runs alongside the phone arm, and instead of it "
         "when the arm cannot ring. It is redundant, not failover: every leg is attempted. "
-        "Pick real targets from `hermes send --list`. "
+        "Pick targets the assistant can already send to. "
         "Example: telegram,photon:any;-;+155****0100. Reply with a comma chain."
     ),
     "daytime": (
@@ -54,6 +54,12 @@ QUESTIONS = {
         "T0 digest, T1 chip, T2 notify, or T3 interrupt now."
     ),
 }
+
+
+def _watchdog_available() -> bool:
+    """The macOS launchd watchdog is opt-in and only offered where it can run."""
+    from sieve_core import doctor
+    return doctor.watchdog_available()
 
 
 def _step(conn) -> str:
@@ -195,11 +201,14 @@ _APPLY = {
 
 def question(step: str) -> str:
     if step == "done":
-        return ("Setup is complete. Verify the arm from this chat: /sieve test T4, then "
+        text = ("Setup is complete. Verify the arm from this chat: /sieve test T4, then "
                 "/sieve test T5 (the alarm fires about a minute out; a verified read-back "
                 "clears any escalation-degraded stamp). "
-                "Change any cell with /sieve matrix set <class> T<n> [context=name]. "
-                "One more thing, outside the plugin: the Tailscale and gateway watchdog does not start "
+                "Change any cell with /sieve matrix set <class> T<n> [context=name].")
+        if not _watchdog_available():
+            return text
+        return text + (
+                " One more thing, outside the plugin: the Tailscale and gateway watchdog does not start "
                 "itself, and its plist ships as a template so it carries no one machine's paths. "
                 "To catch a link drop while Desktop is closed, render and load it once in a terminal "
                 "from the plugin directory: bash scripts/install-watchdog.sh, then launchctl bootstrap "
@@ -214,8 +223,10 @@ def show() -> str:
         "Walk: /sieve setup, then /sieve setup <answer> for each question.",
         "One shot: /sieve setup apply always=needs_human,service_down sleep=23:00-08:00 floor=T5 arm=no digest=telegram chain=telegram,photon:any;-;+15555550100 daytime=T2",
         "Any cell: /sieve matrix set world_message T0 context=sleeping",
-        "Watchdog (opt-in, not started by the plugin): bash scripts/install-watchdog.sh && launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.vgfreak.sieve-watch.plist",
     ]
+    if _watchdog_available():
+        lines.append("Watchdog (opt-in, not started by the plugin): bash scripts/install-watchdog.sh && "
+                     "launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.vgfreak.sieve-watch.plist")
     for step in STEPS:
         lines.append(f"- {step}: {QUESTIONS[step]}")
     return "\n".join(lines)

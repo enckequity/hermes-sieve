@@ -65,7 +65,7 @@ def push_ready(dispatch) -> tuple:
         # merge them. The pane has no device toolset in its context at all.
         return False, status.get("reason") or "device toolset unavailable"
     if not status["devices"]:
-        return False, "no device paired to this profile (open the Hermes app and sign in)"
+        return False, "no device paired to this profile (open the TeamShift app and sign in)"
     import time
     fresh = False
     for dev in status["devices"]:
@@ -92,14 +92,14 @@ def push_fix(reason: str) -> str:
         return ("this surface cannot write the phone by design. "
                 "Run /sieve doctor and /sieve test from a Discord or Telegram chat.")
     if "toolset" in r:
-        return "hermes config set toolsets '[\"hermes-cli\",\"mobile_device\"]', then restart."
+        return "turn on the mobile device toolset for the assistant, then restart it."
     if "no device" in r or "not paired" in r:
-        return "open the Hermes app and sign in to this profile. Pairing follows the sign-in."
+        return "open the TeamShift app and sign in to this profile. Pairing follows the sign-in."
     if "stale" in r:
-        return ("open the Hermes app once and let it sync. Writes queue while the app is closed; "
+        return ("open the TeamShift app once and let it sync. Writes queue while the app is closed; "
                 "closed-app wake is a known limit of this build.")
     if "push is not configured" in r:
-        return ("no enable path exists in this build. T4/T5 ring only while the Hermes app is "
+        return ("no enable path exists in this build. T4/T5 ring only while the TeamShift app is "
                 "open and synced; writes queue while it is closed.")
     return "run /sieve doctor for the fix path."
 
