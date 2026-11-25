@@ -2,6 +2,15 @@
 
 A user-owned notification boundary for Hermes Agent: event classes × escalation tiers (T0 silent digest → T5 top-priority alarm) × quiet hours with breach floors. Context slots such as meeting or sleeping are set by you (`/sieve context`), not read from location or calendar. T5 tries a phone alarm only when the Hermes iOS app is open and synced. Otherwise it stays on an in-app desktop toast plus the chat chain you set.
 
+## TeamShift fork (`teamshift` branch)
+
+This branch carries changes for the TeamShift image on top of upstream `9d9ca4c`:
+
+- **Phone arm off by default.** T4/T5 stay on the desktop toast and the chat chain until the owner runs `/sieve arm yes` (or setup `arm=yes`). Only an explicit `yes` arms it, and `/sieve test` refuses while it is off.
+- **`/sieve` is owner-only.** The CLI, TUI, Desktop and a local gateway session are the owner. A chat sender must be listed in plugin settings `plugins.entries.sieve.settings.owner_ids` as `<platform>:<user id>` (a list or comma string). Anyone else, or a caller the engine cannot identify, gets a refusal before the store is opened. The dashboard pane runs as the signed-in owner.
+- **Neutral wording.** User-facing text says "the TeamShift app" or "the assistant" rather than naming the engine (`tests/test_teamshift.py` checks this).
+- **No OS service.** The plugin never installs a launchd or systemd unit and schedules no job. The macOS watchdog (`scripts/install-watchdog.sh`) is a manual opt-in, and doctor/setup only mention it on macOS when the script is present.
+
 Status: hackathon release candidate for the Hermes Plugin Hackathon. Screenshots are captured separately and are not in this tree yet. What this build does and does not do is listed under [Disclosures](#disclosures).
 
 ### Two axes: what you asked for, and what actually carried it
