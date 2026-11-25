@@ -44,7 +44,7 @@ async def status():
         "desktop_notice": queue.kv_get(conn, "desktop_notice") or "",
         "phone_arm": "yes" if _plugin._phone_wanted(conn) else "no",
         "last_phone_check": queue.kv_get(conn, "last_phone_check") or "",
-        "target": queue.kv_get(conn, "target") or "telegram",
+        "target": queue.kv_get(conn, "target") or "",
         "windows": wins,
         "mutes": mutes,
     }

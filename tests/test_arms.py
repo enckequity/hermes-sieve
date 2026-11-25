@@ -23,6 +23,7 @@ def _fresh(monkeypatch, tmp_path):
     queue.init_schema(conn)
     monkeypatch.setattr(queue, "db", lambda: conn)
     queue.kv_set(conn, "phone_arm", "yes")  # these cases test the armed path (off by default)
+    queue.kv_set(conn, "target", "telegram")  # and a configured target (no default)
     return conn
 
 

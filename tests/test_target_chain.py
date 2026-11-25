@@ -67,9 +67,9 @@ def test_per_tier_chain_overrides_global(monkeypatch, tmp_path):
     assert plugin._targets_for(conn, 2) == ["telegram"]
 
 
-def test_tier_chain_falls_back_to_default(monkeypatch, tmp_path):
+def test_tier_chain_has_no_default_target(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
-    assert plugin._targets_for(conn, 4) == [plugin.DEFAULT_TARGET]
+    assert plugin._targets_for(conn, 4) == []
 
 
 def test_cleared_tier_chain_inherits_global(monkeypatch, tmp_path):

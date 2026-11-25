@@ -22,7 +22,9 @@ from sieve_core import classify, delivery, doctor, escalate, matrix, probe, queu
 
 _VERSION = "0.1.0"
 _CTX = None
-DEFAULT_TARGET = "telegram"
+# No default delivery target: until the owner sets one with /sieve target, an
+# alert is recorded in the store only and nothing leaves the workspace.
+NO_TARGET = "no delivery target set (nothing is sent until you run /sieve target <platform[:chat]>)"
 
 
 def _safe_int(raw, default=0) -> int:
@@ -102,10 +104,10 @@ def _desktop_notice(conn, tier: int, title: str, body: str) -> None:
 
 
 def _digest_targets(conn) -> list:
-    """Global chain, else any tier chain the user actually set, else telegram.
+    """Global chain, else any tier chain the user actually set, else nothing.
 
     A Discord-only or iMessage-only setup must not have its digest silently
-    rewritten onto telegram. The telegram rung is only the empty-store default.
+    rewritten onto another platform, and an empty store sends nowhere.
     """
     chain = delivery.parse_chain(queue.kv_get(conn, "target") or "")
     if chain:
@@ -115,14 +117,14 @@ def _digest_targets(conn) -> list:
         for leg in delivery.parse_chain(queue.kv_get(conn, f"target:T{tier}") or ""):
             if leg not in named:
                 named.append(leg)
-    return named or [DEFAULT_TARGET]
+    return named
 
 # --- core routing ----------------------------------------------------------
 
 def _promote_sweep(conn) -> int:
     """Promotion ladder: held items older than promo_minutes escalate one tier."""
     promo = _safe_int(queue.kv_get(conn, "promo_minutes") or 0)
-    if not promo:
+    if not promo or not _digest_targets(conn):
         return 0
     backoff = queue.kv_get(conn, "promo_backoff_until") or ""
     if backoff > datetime.now().isoformat(timespec="seconds"):
@@ -176,8 +178,11 @@ def _maybe_digest(conn, now=None) -> str:
                 return ""
         except Exception:
             pass
+    targets = _digest_targets(conn)
+    if not targets:
+        return ""
     text = delivery.format_digest(rows)
-    sent = delivery.send_chain(text, _digest_targets(conn))
+    sent = delivery.send_chain(text, targets)
     _record_delivery(conn, sent, "digest")
     if not sent.get("delivered"):
         failed = ", ".join(sent.get("failed") or ["no target"])
@@ -254,6 +259,10 @@ def _route(event_class: str, payload: dict, detail: str = "") -> dict:
             return {"event_id": eid, "held": True, "reason": reason, "tier": decision.tier}
 
         result = _deliver(conn, eid, event_class, payload, decision, detail)
+        if result.get("recorded"):
+            queue.set_event_outcome(conn, eid, "recorded",
+                                    f"{detail} | {NO_TARGET}".strip(" |"))
+            return result
         if not _landed(result):
             queue.set_event_outcome(
                 conn, eid, "failed",
@@ -267,7 +276,7 @@ def _route(event_class: str, payload: dict, detail: str = "") -> dict:
 
 
 def _targets_for(conn, tier):
-    """Per-tier chain, else the global target, else the default.
+    """Per-tier chain, else the global target, else [] (no default: deliver nothing).
 
     A chain is redundant delivery, not failover: for T4/T5 the point is that the
     alert arrives on at least one pipe the user actually looks at.
@@ -275,13 +284,16 @@ def _targets_for(conn, tier):
     chain = delivery.parse_chain(queue.kv_get(conn, f"target:T{tier}"))
     if chain:
         return chain
-    raw = queue.kv_get(conn, "target") or DEFAULT_TARGET
-    return delivery.parse_chain(raw) or [DEFAULT_TARGET]
+    return delivery.parse_chain(queue.kv_get(conn, "target") or "")
 
 
 def _deliver(conn, eid, event_class, payload, decision, detail=""):
     targets = _targets_for(conn, decision.tier)
     tier = decision.tier
+    if tier >= 2 and not targets:
+        # Store only: no chat send, no phone write, no desktop toast.
+        return {"event_id": eid, "delivered": False, "recorded": True,
+                "reason": NO_TARGET, "tier": tier}
     if tier >= 4 and not _phone_wanted(conn):
         why = "no phone arm configured (desktop and chat only)"
         queue.kv_set(conn, "escalation_degraded", why)
@@ -543,7 +555,10 @@ def _cmd_inner(conn, sub, rest) -> str:
         rows = queue.held_events(conn)
         if not rows:
             return "flushed 0 held item(s)"
-        sent = delivery.send_chain(delivery.format_digest(rows), _digest_targets(conn))
+        targets = _digest_targets(conn)
+        if not targets:
+            return f"flush skipped: {len(rows)} held item(s) kept | {NO_TARGET}"
+        sent = delivery.send_chain(delivery.format_digest(rows), targets)
         _record_delivery(conn, sent, "flush")
         if not sent.get("delivered"):
             failed = ", ".join(sent.get("failed") or ["no target"])
@@ -653,8 +668,8 @@ def _cmd_inner(conn, sub, rest) -> str:
         # /sieve target t5 telegram,photon:...   -> set chain for T5
         # /sieve target t5 clear                 -> drop the per-tier override
         if not rest:
-            global_t = queue.kv_get(conn, "target") or DEFAULT_TARGET
-            lines = [f"target: {global_t}" + (" (default)" if not queue.kv_get(conn, 'target') else "")]
+            global_t = queue.kv_get(conn, "target")
+            lines = [f"target: {global_t}" if global_t else f"target: none. {NO_TARGET}"]
             for t in (2, 3, 4, 5):
                 chain = delivery.parse_chain(queue.kv_get(conn, f"target:T{t}"))
                 if chain:
@@ -808,6 +823,40 @@ def _cmd_inner(conn, sub, rest) -> str:
             "setup | matrix")
 
 
+# --- hook payload -> alert text (identifiers only) ---------------------------
+
+def _ident(value, limit=64) -> str:
+    """One identifier, single line, bounded. Never a structure's repr."""
+    if value is None or isinstance(value, (dict, list, tuple, set)):
+        return ""
+    text = " ".join(str(value).split())
+    return text[:limit]
+
+
+def kanban_summary(kwargs: dict) -> str:
+    """A blocked card as task id, run id and the block reason. No other payload."""
+    parts = [f"kanban task {_ident(kwargs.get('task_id')) or 'unknown'} blocked"]
+    run_id = _ident(kwargs.get("run_id"))
+    if run_id:
+        parts.append(f"run {run_id}")
+    reason = _ident(kwargs.get("reason"), 120)
+    if reason:
+        parts.append(f"reason: {reason}")
+    return " | ".join(parts)
+
+
+def subagent_summary(kwargs: dict) -> str:
+    """A finished subagent as its session ids and status. Never its summary or tool history."""
+    parts = [f"subagent {_ident(kwargs.get('child_session_id')) or 'unknown'} finished"]
+    status = _ident(kwargs.get("child_status"), 32)
+    if status:
+        parts.append(f"status: {status}")
+    parent = _ident(kwargs.get("parent_session_id"))
+    if parent:
+        parts.append(f"parent session {parent}")
+    return " | ".join(parts)
+
+
 # --- registration -----------------------------------------------------------
 
 def register(ctx):
@@ -847,12 +896,12 @@ def register(ctx):
     ctx.register_hook("on_human_input_resolved", hook_human_resolved)
 
     def hook_kanban_blocked(*args, **kwargs):
-        _safe_route("needs_human", {"kind": "kanban", "summary": str(kwargs)[:200]})
+        _safe_route("needs_human", {"kind": "kanban", "summary": kanban_summary(kwargs)})
 
     ctx.register_hook("kanban_task_blocked", hook_kanban_blocked)
 
     def hook_subagent_stop(*args, **kwargs):
-        _safe_route("task_done", {"summary": f"subagent finished: {str(kwargs)[:150]}"})
+        _safe_route("task_done", {"summary": subagent_summary(kwargs)})
 
     ctx.register_hook("subagent_stop", hook_subagent_stop)
 

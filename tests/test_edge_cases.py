@@ -24,6 +24,7 @@ def _fresh(monkeypatch, tmp_path):
     queue.init_schema(conn)
     monkeypatch.setattr(queue, "db", lambda: conn)
     monkeypatch.setattr(plugin.delivery, "send", lambda *a, **k: True)
+    queue.kv_set(conn, "target", "telegram")  # no default target: these cases configure one
     return conn
 
 
@@ -276,6 +277,7 @@ def test_flush_keeps_holds_when_send_fails(monkeypatch, tmp_path):
 
 def test_digest_uses_named_tier_chain_not_telegram(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
+    queue.kv_set(conn, "target", "")  # only a tier chain is named here
     queue.kv_set(conn, "target:T5", "photon:+15555550100")
     seen = []
     monkeypatch.setattr(plugin.delivery, "send",

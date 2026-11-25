@@ -44,7 +44,7 @@ def run_checks(dispatch, conn) -> list:
     from . import queue as q
     target = q.kv_get(conn, "target")
     checks.append({"name": "delivery target", "status": "ok" if target else "warn",
-                   "detail": target or "not set (will use the home channel)",
+                   "detail": target or "not set: nothing is sent until you set one",
                    "fix": "" if target else "/sieve target <platform[:chat_id]>"})
 
     # 5. Out-of-band watchdog (catches a link drop while Desktop is closed).

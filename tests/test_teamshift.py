@@ -67,6 +67,7 @@ def test_phone_arm_defaults_off_and_only_yes_arms_it(monkeypatch, tmp_path):
 
 def test_top_tier_never_touches_the_phone_by_default(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
+    queue.kv_set(conn, "target", "telegram")
     touched = []
     monkeypatch.setattr(plugin.escalate, "push_ready", lambda _d: touched.append("ready") or (True, "fresh"))
     monkeypatch.setattr(plugin.escalate, "fire_alarm", lambda *a, **k: touched.append("alarm") or {"ok": True})
@@ -81,6 +82,7 @@ def test_top_tier_never_touches_the_phone_by_default(monkeypatch, tmp_path):
 
 def test_explicit_arm_yes_reaches_the_phone(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
+    queue.kv_set(conn, "target", "telegram")
     monkeypatch.setattr(plugin.escalate, "push_ready", lambda _d: (True, "fresh"))
     monkeypatch.setattr(plugin.escalate, "fire_timer", lambda *a, **k: {"ok": True})
     assert "phone arm on" in plugin._run_command("arm yes")
@@ -247,3 +249,89 @@ def test_register_surface_and_no_service(monkeypatch, tmp_path):
     monkeypatch.setattr(plugin.escalate, "device_status", lambda _d: {"available": False, "reason": "x"})
     text = "\n".join([setup.show(), setup.question("done"), doctor.format_checks(doctor.run_checks(None, conn))])
     assert "launchctl" not in text and "install-watchdog" not in text
+
+
+# -- 5. no default delivery target: record only until the owner sets one ------------------------
+def test_no_target_records_only_and_sends_nothing(monkeypatch, tmp_path):
+    conn = _fresh(monkeypatch, tmp_path)
+    sent, phone = [], []
+    monkeypatch.setattr(plugin.delivery, "send", lambda text, target=None, timeout=30: sent.append(target) or True)
+    monkeypatch.setattr(plugin.escalate, "push_ready", lambda _d: phone.append("ready") or (True, "fresh"))
+    queue.kv_set(conn, "phone_arm", "yes")  # even an armed phone stays silent without a target
+    queue.kv_set(conn, "promo_minutes", "1")
+    assert plugin._targets_for(conn, 4) == [] and plugin._digest_targets(conn) == []
+    for cls in ("needs_human", "service_down", "task_failed", "agent_message"):
+        out = plugin._route(cls, {"summary": "x"})
+        assert out.get("recorded") is True and out["delivered"] is False, cls
+    held = queue.log_event(conn, "task_done", {}, 0, "held")
+    queue.add_hold(conn, held)
+    assert plugin._maybe_digest(conn) == ""
+    assert plugin._run_command("flush").startswith("flush skipped: 1 held")
+    assert "target: none" in plugin._run_command("target")
+    assert sent == [] and phone == []
+    assert queue.kv_get(conn, "desktop_notice") is None
+    actions = [row[4] for row in queue.recent_events(conn, 10)]
+    assert actions.count("recorded") == 4
+    # delivery starts once the owner sets a target
+    plugin._run_command("target discord:#ops")
+    out = plugin._route("task_failed", {"summary": "y"})
+    assert out["delivered"] is True and sent == ["discord:#ops"]
+
+
+# -- 6. hook alert text carries identifiers, never the raw payload -------------------------------
+SECRET = "sk-live-PAYLOAD-should-not-leak"
+
+
+def _hook_texts(monkeypatch, tmp_path):
+    conn = _fresh(monkeypatch, tmp_path)
+    queue.kv_set(conn, "target", "telegram")
+    texts = []
+    monkeypatch.setattr(plugin.delivery, "send", lambda text, target=None, timeout=30: texts.append(text) or True)
+    hooks = {}
+
+    class Ctx(_Ctx):
+        def register_tool(self, *a, **k):
+            pass
+
+        def register_hook(self, name, fn, **k):
+            hooks[name] = fn
+
+        def register_command(self, *a, **k):
+            pass
+
+    plugin.register(Ctx())
+    monkeypatch.setattr(plugin, "_CTX", None)
+    return conn, texts, hooks
+
+
+def test_kanban_blocked_alert_uses_identifiers_only(monkeypatch, tmp_path):
+    conn, texts, hooks = _hook_texts(monkeypatch, tmp_path)
+    hooks["kanban_task_blocked"](task_id="t_42", profile_name="default", board="ops", assignee="dana",
+                                 run_id=7, reason="needs the\nlogin code", body=SECRET, extra={"k": SECRET})
+    stored = queue.recent_events(conn, 1)[0]
+    blob = "\n".join(texts) + str(stored) + json_payloads(conn)
+    assert "t_42" in blob and "run 7" in blob and "reason: needs the login code" in blob
+    assert SECRET not in blob and "assignee" not in blob and "dana" not in blob and "{" not in "\n".join(texts)
+
+
+def test_subagent_stop_alert_uses_identifiers_only(monkeypatch, tmp_path):
+    conn, texts, hooks = _hook_texts(monkeypatch, tmp_path)
+    plugin._run_command("rules add task_done 2")  # make the finished-subagent class deliver
+    hooks["subagent_stop"](parent_session_id="p-1", parent_turn_id="turn", child_session_id="c-9",
+                           child_role="worker", child_summary=SECRET, child_status="completed",
+                           tool_call_history=[{"tool_name": "write_file", "tool_input": SECRET}],
+                           duration_ms=12)
+    blob = "\n".join(texts) + json_payloads(conn)
+    assert texts, "the alert was delivered"
+    assert "c-9" in blob and "status: completed" in blob and "p-1" in blob
+    assert SECRET not in blob and "write_file" not in blob and "tool_call_history" not in blob
+
+
+def test_summaries_never_render_structures():
+    assert plugin.kanban_summary({}) == "kanban task unknown blocked"
+    assert plugin.kanban_summary({"task_id": {"x": SECRET}, "reason": [SECRET]}) == "kanban task unknown blocked"
+    assert plugin.subagent_summary({"child_session_id": "c", "child_status": {"s": SECRET}}) == "subagent c finished"
+
+
+def json_payloads(conn) -> str:
+    return "\n".join(str(r) for r in conn.execute("SELECT * FROM events").fetchall())

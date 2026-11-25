@@ -17,6 +17,7 @@ def _fresh(monkeypatch, tmp_path):
     queue.init_schema(conn)
     monkeypatch.setattr(queue, "db", lambda: conn)
     monkeypatch.setattr(plugin.delivery, "send", lambda *a, **k: True)
+    queue.kv_set(conn, "target", "telegram")  # no default target: configure one
     return conn
 
 
