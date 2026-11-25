@@ -269,7 +269,7 @@ def test_flush_keeps_holds_when_send_fails(monkeypatch, tmp_path):
     eid = queue.log_event(conn, "cron_done", {}, 0, "held")
     queue.add_hold(conn, eid)
     monkeypatch.setattr(plugin.delivery, "send", lambda *a, **k: False)
-    out = plugin._cmd("flush")
+    out = plugin._run_command("flush")
     assert "flush failed" in out
     assert queue.held_count(conn) == 1
 
@@ -288,6 +288,7 @@ def test_digest_uses_named_tier_chain_not_telegram(monkeypatch, tmp_path):
 
 def test_successful_timer_does_not_claim_phone_unsynced(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
+    queue.kv_set(conn, "phone_arm", "yes")
     monkeypatch.setattr(plugin.delivery, "send", lambda *a, **k: True)
     monkeypatch.setattr(plugin.escalate, "push_ready", lambda _d: (True, "device fresh"))
     monkeypatch.setattr(plugin.escalate, "fire_timer",

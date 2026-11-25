@@ -94,9 +94,10 @@ def test_degraded_escalation_still_reaches_the_chain(monkeypatch, tmp_path):
     monkeypatch.setattr(delivery, "send", lambda text, target=None, timeout=30: seen.append(target) or True)
 
     def not_ready(_dispatch):
-        return False, "device stale (no recent sync; open the Hermes app)"
+        return False, "device stale (no recent sync; open the TeamShift app)"
 
     monkeypatch.setattr(plugin.escalate, "push_ready", not_ready)
+    queue.kv_set(conn, "phone_arm", "yes")
     queue.kv_set(conn, "target:T4", "telegram,photon")
     decision = matrix.Decision(tier=4, rule_id="t", label="gate", source="user")
     out = plugin._deliver(conn, 1, "needs_human", {}, decision)

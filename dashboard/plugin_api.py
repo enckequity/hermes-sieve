@@ -42,7 +42,7 @@ async def status():
         "degraded": queue.kv_get(conn, "escalation_degraded") or "",
         "last_delivery": queue.kv_get(conn, "last_delivery") or "",
         "desktop_notice": queue.kv_get(conn, "desktop_notice") or "",
-        "phone_arm": queue.kv_get(conn, "phone_arm") or "yes",
+        "phone_arm": "yes" if _plugin._phone_wanted(conn) else "no",
         "last_phone_check": queue.kv_get(conn, "last_phone_check") or "",
         "target": queue.kv_get(conn, "target") or "telegram",
         "windows": wins,
@@ -86,7 +86,8 @@ async def doctor_lite():
 @router.post("/cmd")
 async def cmd(body: dict):
     args = str((body or {}).get("args", ""))
-    return {"result": _plugin._cmd(args)}
+    # The dashboard is the signed-in owner's own pane, not a chat.
+    return {"result": _plugin._run_command(args)}
 
 
 @router.get("/matrix")

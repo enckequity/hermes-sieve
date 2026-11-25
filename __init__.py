@@ -83,7 +83,12 @@ def _record_delivery(conn, sent: dict, what: str) -> None:
 
 
 def _phone_wanted(conn) -> bool:
-    return (queue.kv_get(conn, "phone_arm") or "yes") != "no"
+    """The phone arm is off until the owner turns it on (/sieve arm yes, or setup arm=yes).
+
+    Only an explicit "yes" arms it: an empty store, a typo or an imported odd
+    value all leave T4/T5 on the desktop toast and the chat chain.
+    """
+    return (queue.kv_get(conn, "phone_arm") or "no") == "yes"
 
 
 def _desktop_notice(conn, tier: int, title: str, body: str) -> None:
@@ -389,7 +394,87 @@ def _dispatch(tool: str, args: dict):
 
 # --- commands ---------------------------------------------------------------
 
-def _cmd(raw_args: str) -> str:
+# Surfaces whose caller is the machine owner by construction: the engine runs
+# the CLI, the TUI and native Desktop as the owner's own OS user, and its gateway
+# carries a local session's command with platform "local". Every other surface
+# is a chat with possibly many people in it.
+_OWNER_SURFACES = frozenset({"cli", "tui", "desktop", "local"})
+
+OWNER_REFUSAL = ("SIEVE: only this assistant's owner can run /sieve here. "
+                 "Run it from the owner's own chat, or ask the owner to add you.")
+
+
+def _owner_ids() -> frozenset:
+    """Messaging senders the owner named in plugin settings: ``owner_ids``, each
+    ``<platform>:<user id>`` (a list or a comma string). Empty when unset."""
+    if _CTX is None:
+        return frozenset()
+    try:
+        raw = _CTX.get_config("owner_ids", [])
+    except Exception:
+        return frozenset()
+    if isinstance(raw, str):
+        raw = raw.split(",")
+    if not isinstance(raw, (list, tuple, set, frozenset)):
+        return frozenset()
+    return frozenset(str(v).strip() for v in raw if str(v).strip() and ":" in str(v))
+
+
+def _session(name: str) -> str:
+    try:
+        from gateway.session_context import get_session_env
+        return str(get_session_env(name) or "").strip()
+    except Exception:
+        return ""
+
+
+def _caller_is_owner(source=None, platform: str = "") -> bool:
+    """True only when the engine proves the caller is the owner. Fails closed.
+
+    No source (CLI, TUI): the declared surface must be a local owner surface and
+    the bound session must not name a chat platform. A gateway source: a local
+    session is the owner; a chat sender must be a non-bot whose id the owner
+    listed in ``owner_ids``, and the turn's actor (when bound) must be that sender.
+    """
+    try:
+        if source is None:
+            surface = str(platform or "").strip().lower()
+            if surface not in _OWNER_SURFACES:
+                return False
+            bound = _session("HERMES_SESSION_PLATFORM").lower()
+            return not bound or bound in _OWNER_SURFACES
+        plat = getattr(getattr(source, "platform", None), "value", getattr(source, "platform", ""))
+        plat = str(plat or "").strip().lower()
+        if not plat:
+            return False
+        if plat == "local":
+            return True
+        if getattr(source, "is_bot", False):
+            return False
+        user_id = str(getattr(source, "user_id", "") or "").strip()
+        if not user_id:
+            return False
+        actor = _session("HERMES_SESSION_ACTOR_ID")
+        if actor and actor != user_id:
+            return False
+        owners = _owner_ids()
+        alt = str(getattr(source, "user_id_alt", "") or "").strip()
+        return f"{plat}:{user_id}" in owners or bool(alt and f"{plat}:{alt}" in owners)
+    except Exception:
+        return False
+
+
+def _cmd(raw_args: str, *, source=None, platform: str = "") -> str:
+    """The registered /sieve handler. Owner-only: every subcommand can redirect,
+    silence, read or ring the owner's alerts, so a caller the engine cannot
+    prove is the owner is refused before the store is opened."""
+    if not _caller_is_owner(source, platform):
+        return OWNER_REFUSAL
+    return _run_command(raw_args)
+
+
+def _run_command(raw_args: str) -> str:
+    """Run a /sieve subcommand for a caller already known to be the owner."""
     try:
         conn = queue.db()
     except Exception:
@@ -527,7 +612,7 @@ def _cmd_inner(conn, sub, rest) -> str:
 
     if sub == "doctor":
         checks = doctor.run_checks(_dispatch, conn)
-        caps = ("capability: T4/T5 ring while the Hermes app is open and synced. "
+        caps = ("capability: T4/T5 ring while the TeamShift app is open and synced. "
                 "With the app closed, writes queue and the alert degrades to the chat chain. "
                 "Closed-app wake is a known limit of this build; there is no push to configure.")
         return _stamp_phone_check(conn, doctor.format_checks(checks) + "\n" + caps)
@@ -535,6 +620,9 @@ def _cmd_inner(conn, sub, rest) -> str:
     if sub == "test":
         # /sieve test T4 | T5  (the first-enable ritual)
         tier = int(rest[0].lower().lstrip("t")) if rest else 4
+        if not _phone_wanted(conn):
+            return ("phone arm is off, so the test did not touch the phone. "
+                    "Turn it on with /sieve arm yes, then run /sieve test again.")
         ready, why = escalate.push_ready(_dispatch)
         if not ready:
             blocked = f"push-gate blocked: {why}.\nfix: {escalate.push_fix(why)}"
@@ -689,8 +777,8 @@ def _cmd_inner(conn, sub, rest) -> str:
 
     if sub == "arm":
         if not rest:
-            mode = queue.kv_get(conn, "phone_arm") or "yes"
-            return (f"phone arm: {mode} (yes | no | both). "
+            mode = "yes" if _phone_wanted(conn) else "no"
+            return (f"phone arm: {mode} (yes | no | both; off unless you turn it on). "
                     "no means T4/T5 stay on desktop toast and the chat chain. "
                     "A ring through Silent is not available.")
         mode = rest[0].lower()

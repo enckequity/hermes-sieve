@@ -78,19 +78,19 @@ def test_promotion_ladder_escalates_stale_hold(monkeypatch, tmp_path):
 
 def test_simulate_command(monkeypatch, tmp_path):
     _fresh(monkeypatch, tmp_path)
-    out = plugin._cmd("simulate needs_human meeting")
+    out = plugin._run_command("simulate needs_human meeting")
     assert "T4" in out and ("deliver now" in out or "ESCALATE" in out)
-    out2 = plugin._cmd("simulate cron_done base")
+    out2 = plugin._run_command("simulate cron_done base")
     assert "HOLD to digest" in out2
 
 
 def test_context_and_budget_and_promote_commands(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
-    assert "context set" in plugin._cmd("context streaming")
+    assert "context set" in plugin._run_command("context streaming")
     assert queue.kv_get(conn, "active_context") == "streaming"
-    assert "budget set" in plugin._cmd("budget 3")
+    assert "budget set" in plugin._run_command("budget 3")
     assert queue.kv_get(conn, "budget_per_hour") == "3"
-    assert "ladder set" in plugin._cmd("promote 30")
+    assert "ladder set" in plugin._run_command("promote 30")
     assert queue.kv_get(conn, "promo_minutes") == "30"
 
 

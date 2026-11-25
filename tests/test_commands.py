@@ -22,16 +22,16 @@ def _fresh(monkeypatch, tmp_path):
 
 def test_setup_walk_and_apply(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
-    first = plugin._cmd("setup")
+    first = plugin._run_command("setup")
     assert "no matter the hour" in first
-    plugin._cmd("setup needs_human,service_down")
-    plugin._cmd("setup 23:00-08:00")
-    plugin._cmd("setup T5")
-    plugin._cmd("setup no")
-    plugin._cmd("setup discord:#ops")
-    chain = plugin._cmd("setup telegram,photon:any;-;+15555550100")
+    plugin._run_command("setup needs_human,service_down")
+    plugin._run_command("setup 23:00-08:00")
+    plugin._run_command("setup T5")
+    plugin._run_command("setup no")
+    plugin._run_command("setup discord:#ops")
+    chain = plugin._run_command("setup telegram,photon:any;-;+15555550100")
     assert "[daytime]" in chain
-    done = plugin._cmd("setup T2")
+    done = plugin._run_command("setup T2")
     assert "Setup is complete" in done
     assert queue.kv_get(conn, "target") == "discord:#ops"
     assert queue.kv_get(conn, "target:T4") == "telegram,photon:any;-;+15555550100"
@@ -47,14 +47,14 @@ def test_setup_walk_and_apply(monkeypatch, tmp_path):
 
 def test_setup_apply_is_one_shot(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
-    out = plugin._cmd(
+    out = plugin._run_command(
         "setup apply always=needs_human sleep=22:00-07:00 floor=none digest=slack:C012 daytime=T0")
     assert "applied" in out
     assert queue.kv_get(conn, "target") == "slack:C012"
     assert queue.windows(conn)[0][4] == 6
-    cell = plugin._cmd("matrix set world_message T3 context=meeting")
+    cell = plugin._run_command("matrix set world_message T3 context=meeting")
     assert "meeting" in cell
-    grid = plugin._cmd("matrix")
+    grid = plugin._run_command("matrix")
     assert "needs_human: T5" in grid
 
 
@@ -64,19 +64,19 @@ def test_export_and_import_confined_to_profile_data_dir(monkeypatch, tmp_path):
     monkeypatch.setattr(plugin, "_policy_dir", lambda: data_dir)
     queue.add_rule(conn, "needs_human", {}, 4, label="gate", source="user")
 
-    out = plugin._cmd("export")
+    out = plugin._run_command("export")
     assert "policy exported" in out
     assert (data_dir / "policy.json").exists()
 
-    refused = plugin._cmd("export ../outside.json")
+    refused = plugin._run_command("export ../outside.json")
     assert "refused" in refused
     assert not (tmp_path / "plugin-data" / "outside.json").exists()
-    assert plugin._cmd("import ../outside.json").startswith("import refused")
+    assert plugin._run_command("import ../outside.json").startswith("import refused")
 
     other = sqlite3.connect(str(tmp_path / "other.db"))
     queue.init_schema(other)
     monkeypatch.setattr(queue, "db", lambda: other)
-    merged = plugin._cmd("import")
+    merged = plugin._run_command("import")
     assert "merged" in merged
     assert queue.rules_for(other, "needs_human")
 
@@ -86,7 +86,7 @@ def test_no_phone_does_not_fire_alarm(monkeypatch, tmp_path):
     fired = []
     monkeypatch.setattr(plugin.escalate, "fire_alarm", lambda *a, **k: fired.append(1) or {"ok": True})
     monkeypatch.setattr(plugin.escalate, "push_ready", lambda *a, **k: (True, "fresh"))
-    assert "phone arm off" in plugin._cmd("arm no")
+    assert "phone arm off" in plugin._run_command("arm no")
     decision = plugin.matrix.Decision(tier=5, rule_id="t", label="down", source="user")
     out = plugin._deliver(conn, 1, "service_down", {}, decision)
     assert fired == []
@@ -96,20 +96,20 @@ def test_no_phone_does_not_fire_alarm(monkeypatch, tmp_path):
 
 def test_status_and_why(monkeypatch, tmp_path):
     _fresh(monkeypatch, tmp_path)
-    assert "SIEVE status" in plugin._cmd("status")
-    assert "last decisions" in plugin._cmd("why")
+    assert "SIEVE status" in plugin._run_command("status")
+    assert "last decisions" in plugin._run_command("why")
 
 
 def test_mute_command(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
-    out = plugin._cmd("mute T4 until 9am")
+    out = plugin._run_command("mute T4 until 9am")
     assert "muted T0-T4" in out
     assert queue.active_mutes(conn, queue.now_iso())
 
 
 def test_quiet_command(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
-    out = plugin._cmd("quiet 23:00-08:00 floor=T5 weekdays")
+    out = plugin._run_command("quiet 23:00-08:00 floor=T5 weekdays")
     assert "floor=T5" in out
     wins = queue.windows(conn)
     assert wins[0][2] == "08:00" and wins[0][4] == 5 and wins[0][3] == "01234"
@@ -117,16 +117,16 @@ def test_quiet_command(monkeypatch, tmp_path):
 
 def test_pause_and_clear(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
-    assert "paused" in plugin._cmd("pause 2h")
+    assert "paused" in plugin._run_command("pause 2h")
     assert queue.kv_get(conn, "paused_until")
-    assert "cleared" in plugin._cmd("pause off")
+    assert "cleared" in plugin._run_command("pause off")
 
 
 def test_rules_add_and_list(monkeypatch, tmp_path):
     _fresh(monkeypatch, tmp_path)
-    out = plugin._cmd("rules add world_message 5 sender=boss")
+    out = plugin._run_command("rules add world_message 5 sender=boss")
     assert "rule #" in out
-    assert "world_message T5 user" in plugin._cmd("rules")
+    assert "world_message T5 user" in plugin._run_command("rules")
 
 
 def test_phone_check_stamps_only_with_context(monkeypatch, tmp_path):
@@ -145,7 +145,7 @@ def test_phone_check_stamps_only_with_context(monkeypatch, tmp_path):
 
 def test_target_set(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
-    assert "discord" in plugin._cmd("target discord:#digests")
+    assert "discord" in plugin._run_command("target discord:#digests")
     assert queue.kv_get(conn, "target") == "discord:#digests"
 
 
@@ -155,6 +155,6 @@ def test_flush_releases_and_digests(monkeypatch, tmp_path):
     queue.add_hold(conn, eid)
     sent = []
     monkeypatch.setattr(plugin.delivery, "send", lambda text, target=None, **k: sent.append(text) or True)
-    out = plugin._cmd("flush")
+    out = plugin._run_command("flush")
     assert "flushed 1" in out
     assert sent and "SIEVE digest" in sent[0]

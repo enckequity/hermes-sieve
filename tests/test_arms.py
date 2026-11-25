@@ -22,6 +22,7 @@ def _fresh(monkeypatch, tmp_path):
     conn = sqlite3.connect(str(tmp_path / "arms.db"))
     queue.init_schema(conn)
     monkeypatch.setattr(queue, "db", lambda: conn)
+    queue.kv_set(conn, "phone_arm", "yes")  # these cases test the armed path (off by default)
     return conn
 
 

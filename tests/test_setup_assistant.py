@@ -35,21 +35,22 @@ def test_push_ready_propagates_specific_reason(monkeypatch):
 def test_push_fix_never_points_at_push_registration():
     fix = plugin.escalate.push_fix
     assert "Discord or Telegram" in fix("no tool context on this surface (ctx unavailable)")
-    assert "toolsets" in fix("mobile_device toolset not loaded")
-    assert "sign in" in fix("no device paired to this profile (open the Hermes app)")
+    assert "toolset" in fix("mobile_device toolset not loaded")
+    assert "sign in" in fix("no device paired to this profile (open the TeamShift app)")
     assert "queue" in fix("device stale (no recent sync)")
-    out = fix("Push is not configured; Hermes Agent will fetch this request when opened.")
+    out = fix("Push is not configured; the assistant will fetch this request when opened.")
     assert "no enable path" in out
     assert "configure push" not in out.lower()
 
 
 def test_test_t5_verified_clears_degrade_and_stamps_ritual(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
+    queue.kv_set(conn, "phone_arm", "yes")
     queue.kv_set(conn, "escalation_degraded", "device stale (old)")
     monkeypatch.setattr(plugin.escalate, "push_ready", lambda d: (True, "device fresh"))
     monkeypatch.setattr(plugin.escalate, "fire_alarm",
                         lambda *a, **k: {"ok": True, "verified": True})
-    out = plugin._cmd("test T5")
+    out = plugin._run_command("test T5")
     assert "ok" in out
     assert not queue.kv_get(conn, "escalation_degraded")
     assert queue.kv_get(conn, "ritual_done_at")
@@ -57,38 +58,40 @@ def test_test_t5_verified_clears_degrade_and_stamps_ritual(monkeypatch, tmp_path
 
 def test_test_t5_unverified_keeps_degrade(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
+    queue.kv_set(conn, "phone_arm", "yes")
     queue.kv_set(conn, "escalation_degraded", "device stale (old)")
     monkeypatch.setattr(plugin.escalate, "push_ready", lambda d: (True, "device fresh"))
     monkeypatch.setattr(plugin.escalate, "fire_alarm",
                         lambda *a, **k: {"ok": True, "verified": False})
-    plugin._cmd("test T5")
+    plugin._run_command("test T5")
     assert queue.kv_get(conn, "escalation_degraded")  # a weaker/unverified arm never clears it
 
 
 def test_test_blocked_names_cause_and_reachable_fix(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
+    queue.kv_set(conn, "phone_arm", "yes")
     monkeypatch.setattr(plugin.escalate, "push_ready",
                         lambda d: (False, "device stale (no recent sync)"))
-    out = plugin._cmd("test T5")
+    out = plugin._run_command("test T5")
     assert out.startswith("push-gate blocked")
     assert "device stale" in out
-    assert "open the Hermes app" in out
+    assert "open the TeamShift app" in out
     assert "configure push" not in out.lower()
 
 
 def test_setup_chain_step_sets_both_tiers_idempotent(monkeypatch, tmp_path):
     conn = _fresh(monkeypatch, tmp_path)
-    plugin._cmd("setup needs_human")
-    plugin._cmd("setup 23:00-08:00")
-    plugin._cmd("setup T5")
-    plugin._cmd("setup yes")
-    out = plugin._cmd("setup telegram")  # digest
+    plugin._run_command("setup needs_human")
+    plugin._run_command("setup 23:00-08:00")
+    plugin._run_command("setup T5")
+    plugin._run_command("setup yes")
+    out = plugin._run_command("setup telegram")  # digest
     assert "[chain]" in out  # the walk reaches the chain question
-    out = plugin._cmd("setup telegram,photon:any;-;+15555550100")
+    out = plugin._run_command("setup telegram,photon:any;-;+15555550100")
     assert "[daytime]" in out
     # one-shot chain is idempotent: re-applying changes no row count
-    plugin._cmd("setup apply chain=telegram,photon:any;-;+15555550100")
-    plugin._cmd("setup apply chain=telegram,photon:any;-;+15555550100")
+    plugin._run_command("setup apply chain=telegram,photon:any;-;+15555550100")
+    plugin._run_command("setup apply chain=telegram,photon:any;-;+15555550100")
     assert queue.kv_get(conn, "target:T4") == "telegram,photon:any;-;+15555550100"
     assert queue.kv_get(conn, "target:T5") == "telegram,photon:any;-;+15555550100"
 
